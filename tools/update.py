@@ -30,7 +30,7 @@ def probe():
     if not re.fullmatch(r'build-[1-9][0-9]*', tag): raise RuntimeError('Unrecognized upstream release tag')
     if not any(a['name'] == 'halo-android-release.zip' for a in release['assets']):
         raise RuntimeError('Upstream release has no Android release')
-    # Rebuild after either an upstream release or a change to our patch/build scripts.
+    # Fingerprint records provenance only; it does not trigger a rebuild.
     digest = hashlib.sha256()
     for name in ('custom-halo.patch', 'tools/update.py', '.github/workflows/update.yml'):
         digest.update((ROOT / name).read_bytes())
@@ -39,8 +39,19 @@ def probe():
     try: previous = api('repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases/latest')
     except urllib.error.HTTPError as error:
         if error.code != 404: raise
-    required = {'halo-browser.apk', 'halo-android-browser.zip', 'upstream.json'}
-    build = previous is None or fingerprint not in previous.get('body', '') or not required.issubset({a['name'] for a in previous.get('assets', [])})
+    # Compare the upstream build already published, not our patch fingerprint.
+    # Existing releases include this marker in their automatically generated notes.
+    published_tag = None
+    if previous is not None:
+        notes = previous.get('body', '') or ''
+        match = re.search(r'Build fingerprint:\s*(build-[1-9][0-9]*):', notes)
+        if match is None:
+            match = re.search(r'based on cybersecurity (build-[1-9][0-9]*)', notes)
+        if match is None:
+            raise RuntimeError('Cannot identify the upstream build in the latest custom release notes; refusing an unnecessary rebuild')
+        published_tag = match.group(1)
+    build = previous is None or int(tag[6:]) > int(published_tag[6:])
+    print('New upstream Android release: ' + tag if build else 'No newer upstream Android release; skipping APK build')
     output('build', str(build).lower()); output('upstream', tag); output('fingerprint', fingerprint)
     (ROOT / 'upstream.json').write_text(json.dumps({'tag': tag, 'url': release['html_url'], 'fingerprint': fingerprint}, indent=2))
 
