@@ -161,13 +161,17 @@ index 08d788e9..6be219cf 100644
  
 diff --git a/port/android/app/src/main/java/com/halo/decomp/CommunityDirectoryClient.java b/port/android/app/src/main/java/com/halo/decomp/CommunityDirectoryClient.java
 new file mode 100644
-index 00000000..2824821a
+index 00000000..0db976b1
 --- /dev/null
 +++ b/port/android/app/src/main/java/com/halo/decomp/CommunityDirectoryClient.java
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,176 @@
 +package com.halo.decomp;
 +
 +import android.app.Activity;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
++import java.util.LinkedHashSet;
++import java.util.HashMap;
 +import android.os.SystemClock;
 +import org.json.JSONArray;
 +import org.json.JSONObject;
@@ -186,6 +190,7 @@ index 00000000..2824821a
 +    private ScheduledExecutorService executor;
 +    private volatile int generation;
 +    private long lastFetch;
++    private final HashMap<String, Long> artAttempts = new HashMap<>();
 +
 +    CommunityDirectoryClient(Activity activity) {
 +        File data = activity.getExternalFilesDir(null);
@@ -230,6 +235,7 @@ index 00000000..2824821a
 +            }
 +            ByteArrayOutputStream records = new ByteArrayOutputStream();
 +            int count = 0;
++            LinkedHashSet<String> mapImages = new LinkedHashSet<>();
 +            for (int i = 0; i < games.length() && count < 64; i++) {
 +                JSONObject game = games.optJSONObject(i);
 +                if (game == null) continue;
@@ -245,7 +251,9 @@ index 00000000..2824821a
 +                System.arraycopy(invite.getBytes(StandardCharsets.US_ASCII), 0, wire, 9, 64);
 +                text(wire, 73, 32, game.optString("name", "Halo lobby"));
 +                String map = game.optString("map", "Unknown map").replace('\\', '/');
-+                text(wire, 105, 32, map.substring(map.lastIndexOf('/') + 1));
++                map = map.substring(map.lastIndexOf('/') + 1);
++                text(wire, 105, 32, map);
++                mapImages.add(map.toLowerCase(Locale.ROOT));
 +                String[] modes = {"Custom", "CTF", "Slayer", "Oddball", "King", "Race"};
 +                int mode = game.optInt("engine", 0);
 +                String label = version != BuildConfig.HALO_NETWORK_VERSION ? "Incompatible"
@@ -256,9 +264,64 @@ index 00000000..2824821a
 +                records.write(wire); count++;
 +            }
 +            publish(run, 1, count, records.toByteArray());
++            int attempted = 0;
++            for (String map : mapImages) {
++                if (run != generation || Thread.currentThread().isInterrupted()) break;
++                if (cacheMapArt(run, map) && ++attempted >= 2) break;
++            }
 +        } catch (Exception e) {
 +            publish(run, 2, 0, new byte[0]);
 +        } finally { if (connection != null) connection.disconnect(); }
++    }
++    // Only known Milenko map paths; images are optional and never gate joining.
++    private boolean cacheMapArt(int run, String map) {
++        if (!java.util.Arrays.asList("beavercreek", "bloodgulch", "boardingaction", "carousel", "chillout",
++                "damnation", "hangemhigh", "longest", "prisoner", "putput", "ratrace", "sidewinder", "wizard").contains(map)) return false;
++        File destination = new File(root, "community_art_" + map + ".rgb");
++        if (destination.length() == 2400) return false;
++        long now = SystemClock.elapsedRealtime();
++        if (artAttempts.containsKey(map) && now - artAttempts.get(map) < 60000) return false;
++        artAttempts.put(map, now);
++        HttpURLConnection connection = null;
++        Bitmap bitmap = null, small = null;
++        File temporary = new File(root, "community_art_" + map + ".partial");
++        try {
++            connection = (HttpURLConnection)new URL("https://halo.milenko.org/art/maps/" + map + ".jpg").openConnection();
++            connection.setInstanceFollowRedirects(false);
++            connection.setConnectTimeout(3000); connection.setReadTimeout(3000);
++            if (connection.getResponseCode() != 200) return true;
++            byte[] image;
++            try (InputStream in = connection.getInputStream(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
++                byte[] buffer = new byte[4096]; int n;
++                while ((n = in.read(buffer)) != -1) {
++                    if (out.size() + n > 524288) return true;
++                    out.write(buffer, 0, n);
++                }
++                image = out.toByteArray();
++            }
++            BitmapFactory.Options options = new BitmapFactory.Options(); options.inJustDecodeBounds = true;
++            BitmapFactory.decodeByteArray(image, 0, image.length, options);
++            if (options.outWidth <= 0 || options.outHeight <= 0 || options.outWidth > 4096 || options.outHeight > 4096) return true;
++            options.inJustDecodeBounds = false; options.inSampleSize = 1;
++            while (options.outWidth / options.inSampleSize > 160 || options.outHeight / options.inSampleSize > 80) options.inSampleSize *= 2;
++            bitmap = BitmapFactory.decodeByteArray(image, 0, image.length, options);
++            if (bitmap == null) return true;
++            small = Bitmap.createScaledBitmap(bitmap, 40, 20, true);
++            int[] pixels = new int[800]; small.getPixels(pixels, 0, 40, 0, 0, 40, 20);
++            try (OutputStream out = new FileOutputStream(temporary)) {
++                for (int pixel : pixels) { out.write((pixel >> 16) & 255); out.write((pixel >> 8) & 255); out.write(pixel & 255); }
++            }
++            synchronized (this) {
++                if (run == generation) { if (!temporary.renameTo(destination)) temporary.delete(); }
++                else temporary.delete();
++            }
++        } catch (Exception ignored) { temporary.delete(); }
++        finally {
++            if (small != null && small != bitmap) small.recycle();
++            if (bitmap != null) bitmap.recycle();
++            if (connection != null) connection.disconnect();
++        }
++        return true;
 +    }
 +    private synchronized void publish(int run, int state, int count, byte[] records) {
 +        if (run != generation) return;
@@ -611,7 +674,7 @@ index 06ff2b24..77878382 100644
  	return 0;
  }
 diff --git a/port/linux/src/p2p.c b/port/linux/src/p2p.c
-index cbecc337..c623bc3c 100644
+index cbecc337..a228c6f5 100644
 --- a/port/linux/src/p2p.c
 +++ b/port/linux/src/p2p.c
 @@ -57,6 +57,11 @@ only look up and create stand-ins.
@@ -657,7 +720,7 @@ index cbecc337..c623bc3c 100644
  	return 1;
  }
  
-@@ -2307,13 +2320,57 @@ int p2p_join_invite(const char *text)
+@@ -2307,13 +2320,72 @@ int p2p_join_invite(const char *text)
  
  	p2p_identifier();
  	pthread_mutex_lock(&p2p_lock);
@@ -676,6 +739,7 @@ index cbecc337..c623bc3c 100644
  
 +static unsigned char browser_autojoin_host[P2P_IDENTIFIER_SIZE];
 +static int browser_autojoin_pending;
++static int browser_autojoin_active;
 +static char browser_autojoin_invite[256];
 +int p2p_browser_request_join(const char *text)
 +{
@@ -692,6 +756,7 @@ index cbecc337..c623bc3c 100644
 +    memcpy(browser_autojoin_host, host, sizeof(browser_autojoin_host));
 +    snprintf(browser_autojoin_invite, sizeof(browser_autojoin_invite), "%s", text);
 +    snprintf(p2p.browser_status, sizeof(p2p.browser_status), "Starting internet networking...");
++    browser_autojoin_active = 1;
 +    browser_autojoin_pending = 1;
 +    pthread_mutex_unlock(&p2p_lock);
 +    return 1;
@@ -705,6 +770,19 @@ index cbecc337..c623bc3c 100644
 +    pthread_mutex_unlock(&p2p_lock);
 +    return pending;
 +}
++int p2p_browser_join_active(void)
++{
++    int active; pthread_mutex_lock(&p2p_lock); active = browser_autojoin_active;
++    pthread_mutex_unlock(&p2p_lock); return active;
++}
++void p2p_browser_cancel_join(void)
++{
++    pthread_mutex_lock(&p2p_lock);
++    browser_autojoin_active = browser_autojoin_pending = 0;
++    p2p.joining = p2p.join_requested = 0;
++    p2p.browser_status[0] = 0;
++    pthread_mutex_unlock(&p2p_lock);
++}
 +void p2p_browser_message(const char *text)
 +{
 +    pthread_mutex_lock(&p2p_lock);
@@ -715,7 +793,7 @@ index cbecc337..c623bc3c 100644
  void p2p_invite_received(const char *text)
  {
  	/* (an older version's is logged as such) */
-@@ -2343,6 +2400,7 @@ static void update_joining(void)
+@@ -2343,6 +2415,7 @@ static void update_joining(void)
  	{
  		p2p.joining = 0;
  		p2p_signal_stop_joining();
@@ -723,7 +801,7 @@ index cbecc337..c623bc3c 100644
  		platform_log("Internet play: no answer from the invite's host; it may have stopped hosting or quit");
  	}
  }
-@@ -2384,12 +2442,6 @@ static void update_hosting(void)
+@@ -2384,12 +2457,6 @@ static void update_hosting(void)
  		p2p_signal_host(p2p.token);
  		platform_log("Internet play: hosting. Invite players with this link (it only works while this "
  			"copy of the game runs): %s", p2p.invite);
@@ -736,7 +814,7 @@ index cbecc337..c623bc3c 100644
  		p2p.reported_player_count = -1;
  	}
  	else if (!want && p2p.hosting)
-@@ -2397,6 +2449,7 @@ static void update_hosting(void)
+@@ -2397,6 +2464,7 @@ static void update_hosting(void)
  		p2p.hosting = 0;
  		p2p_signal_stop_hosting();
  		p2p_discord_set_hosting(NULL, 0, 0);
@@ -744,7 +822,7 @@ index cbecc337..c623bc3c 100644
  	}
  	if (p2p.hosting)
  	{
-@@ -2405,6 +2458,18 @@ static void update_hosting(void)
+@@ -2405,6 +2473,18 @@ static void update_hosting(void)
  		int count = p2p.game_player_maximum > 0 ? p2p.game_player_count : connected_player_count() + 1;
  		int maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : P2P_MAXIMUM_PEERS + 1;
  
@@ -763,7 +841,7 @@ index cbecc337..c623bc3c 100644
  		if (count != p2p.reported_player_count || maximum != p2p.reported_player_maximum)
  		{
  			p2p.reported_player_count = count;
-@@ -2887,6 +2952,7 @@ static void *p2p_thread(void *unused)
+@@ -2887,6 +2967,7 @@ static void *p2p_thread(void *unused)
  		update_peers();
  		expire_proxies();
  		stun_update();
@@ -771,7 +849,7 @@ index cbecc337..c623bc3c 100644
  		update_hosting();
  		update_joining();
  		update_upnp();
-@@ -2956,3 +3022,184 @@ void p2p_initialize(unsigned long local_address)
+@@ -2956,3 +3037,185 @@ void p2p_initialize(unsigned long local_address)
  	if (command_line_invite(invite, sizeof(invite)))
  		p2p_join_invite(invite);
  }
@@ -841,6 +919,7 @@ index cbecc337..c623bc3c 100644
 +
 +void p2p_browser_open(int open)
 +{
++    if (!open) p2p_browser_cancel_join();
 +    pthread_mutex_lock(&p2p_lock); p2p.browser_open = open; pthread_mutex_unlock(&p2p_lock);
 +#ifdef HALO_ANDROID
 +    {
@@ -957,20 +1036,22 @@ index cbecc337..c623bc3c 100644
 +    pthread_mutex_unlock(&p2p_lock);
 +}
 diff --git a/port/linux/src/p2p.h b/port/linux/src/p2p.h
-index d423532a..ab0573e9 100644
+index d423532a..31fe9037 100644
 --- a/port/linux/src/p2p.h
 +++ b/port/linux/src/p2p.h
-@@ -25,6 +25,9 @@ int p2p_hand_off_invite(void);
+@@ -25,6 +25,11 @@ int p2p_hand_off_invite(void);
  /* joins the game an invite link or code leads to; text may hold other
  words around it. Returns nonzero if it held an invite */
  int p2p_join_invite(const char *text);
 +int p2p_browser_request_join(const char *text);
 +int p2p_browser_take_autojoin(unsigned char *host, char *invite);
++int p2p_browser_join_active(void);
++void p2p_browser_cancel_join(void);
 +void p2p_browser_message(const char *text);
  
  /* this machine's identifier, which its XNADDR carries (6 bytes) */
  const unsigned char *p2p_identifier(void);
-@@ -104,5 +107,28 @@ void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
+@@ -104,5 +109,28 @@ void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
  virtual address (network byte order): where its packets come from; 0 if
  it is no peer's */
  unsigned long p2p_peer_endpoint_address(unsigned long virtual_address);
@@ -1118,10 +1199,10 @@ index 00000000..d08d8564
 +#endif
 diff --git a/port/linux/src/p2p_browser_ui.h b/port/linux/src/p2p_browser_ui.h
 new file mode 100644
-index 00000000..cacc3b42
+index 00000000..a171e1fc
 --- /dev/null
 +++ b/port/linux/src/p2p_browser_ui.h
-@@ -0,0 +1,261 @@
+@@ -0,0 +1,295 @@
 +/* Main-thread, nonblocking touch/mouse browser. Included by sdl_platform.c.
 +   Drawing uses only scissor clears already available in the Android GL bridge.
 +   D3DDevice_Present invalidates GL state after platform_video_swap. */
@@ -1129,6 +1210,10 @@ index 00000000..cacc3b42
 +static struct p2p_browser_snapshot browser_view;
 +static Uint64 browser_snapshot_time;
 +static char browser_notice[128];
++static char browser_selected_invite[256];
++static unsigned char browser_art[5][40 * 20 * 3];
++static int browser_art_ready[5];
++const char *platform_save_root(void);
 +static int browser_width, browser_height;
 +static const char browser_font_chars[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -/.:>?()_";
 +static const unsigned char browser_font[][7] = {
@@ -1209,6 +1294,7 @@ index 00000000..cacc3b42
 +static void browser_show(int visible)
 +{
 +    browser_visible = visible; browser_confirm_public = 0;
++    if (!visible) { browser_selected_invite[0] = 0; browser_notice[0] = 0; }
 +    p2p_browser_open(visible);
 +    platform_mouse_capture(!visible && !input_state.mouse_released && !input_state.ui_pointer);
 +    memset(input_state.keys, 0, sizeof(input_state.keys));
@@ -1222,9 +1308,6 @@ index 00000000..cacc3b42
 +    if (!browser_snapshot_time || SDL_GetTicks() - browser_snapshot_time >= 250)
 +    {
 +        p2p_browser_snapshot(&browser_view);
-+        if (browser_view.status[0] &&
-+            (!strncmp(browser_notice, "Connecting...", 13) || !strncmp(browser_notice, "Join rejected.", 14)))
-+            browser_notice[0] = 0;
 +        browser_snapshot_time = SDL_GetTicks();
 +        if (browser_page * 5 >= browser_view.count) browser_page = browser_view.count ? (browser_view.count - 1) / 5 : 0;
 +    }
@@ -1284,10 +1367,13 @@ index 00000000..cacc3b42
 +        }
 +        else if (entry->joinable && (!entry->maximum || entry->players < entry->maximum))
 +        {
-+            if (p2p_browser_request_join(entry->invite)) {
-+                snprintf(browser_notice, sizeof(browser_notice), "Connecting... the selected lobby will open automatically.");
++            if (p2p_browser_join_active() && !strcmp(browser_selected_invite, entry->invite)) {
++                p2p_browser_cancel_join(); browser_selected_invite[0] = 0; browser_notice[0] = 0;
++            } else if (p2p_browser_request_join(entry->invite)) {
++                snprintf(browser_selected_invite, sizeof(browser_selected_invite), "%s", entry->invite);
++                browser_notice[0] = 0;
 +            } else {
-+                snprintf(browser_notice, sizeof(browser_notice), "Join rejected. Check internet play settings or try another server.");
++                snprintf(browser_notice, sizeof(browser_notice), "Could not join this room. Try another server.");
 +            }
 +            browser_snapshot_time = 0;
 +        }
@@ -1323,6 +1409,30 @@ index 00000000..cacc3b42
 +        event->type == SDL_EVENT_FINGER_MOTION)) return 1;
 +    return 0;
 +}
++static void browser_map_art(int row, const char *map, int x, int y)
++{
++    static char cached_map[5][32]; static Uint64 loaded[5];
++    unsigned char *pixels = browser_art[row]; int a, b;
++    if (strcmp(cached_map[row], map) || SDL_GetTicks() - loaded[row] >= 1000) {
++        char path[1024], key[32]; FILE *file; int n;
++        snprintf(key, sizeof(key), "%s", map);
++        for (n = 0; key[n]; n++) {
++            if (key[n] >= 'A' && key[n] <= 'Z') key[n] += 'a' - 'A';
++            if (!((key[n] >= 'a' && key[n] <= 'z') || (key[n] >= '0' && key[n] <= '9') || key[n] == '_')) key[n] = '_';
++        }
++        snprintf(path, sizeof(path), "%s/community_art_%s.rgb", platform_save_root(), key);
++        file = fopen(path, "rb"); browser_art_ready[row] = file && fread(pixels, 1, 2400, file) == 2400;
++        if (file) fclose(file);
++        snprintf(cached_map[row], sizeof(cached_map[row]), "%s", map); loaded[row] = SDL_GetTicks();
++    }
++    browser_rect(x, y, 80, 40, .1f, .22f, .3f);
++    if (!browser_art_ready[row]) { browser_text_draw(x + 10, y + 13, "HALO", 4); return; }
++    for (a = 0; a < 20; a++) for (b = 0; b < 40;) {
++        int end = b + 1; unsigned char *pixel = pixels + (a * 40 + b) * 3;
++        while (end < 40 && !memcmp(pixel, pixels + (a * 40 + end) * 3, 3)) end++;
++        browser_rect(x + b * 2, y + a * 2, (end - b) * 2, 2, pixel[0] / 255.f, pixel[1] / 255.f, pixel[2] / 255.f); b = end;
++    }
++}
 +static void browser_draw(void)
 +{
 +    char text[160]; int row;
@@ -1337,7 +1447,7 @@ index 00000000..cacc3b42
 +    }
 +    browser_update_view();
 +    browser_rect(0, 0, 800, 480, .02f, .055f, .09f);
-+    browser_text_draw(16, 20, "Community and shared games", 48);
++    browser_text_draw(16, 20, "HALO - COMMUNITY SERVERS", 48);
 +    browser_button(650, 8, 134, "Close");
 +    if (browser_confirm_public)
 +    {
@@ -1350,9 +1460,8 @@ index 00000000..cacc3b42
 +    }
 +    else
 +    {
-+        browser_text_draw(16, 56, !browser_view.online ? "Choose a server and tap Join to connect." :
-+            browser_view.count ? "Live listings - host-reported counts - updates every 10s" :
-+            !browser_view.connected ? "Connecting to discovery brokers..." : "Live listings - host-reported counts - updates every 10s", 64);
++        snprintf(text, sizeof(text), "%d rooms / Milenko and shared invites", browser_view.count);
++        browser_text_draw(16, 56, text, 62);
 +        if (!browser_view.count)
 +        {
 +            browser_text_draw(20, 150, "Waiting for public hosts...", 60);
@@ -1366,14 +1475,20 @@ index 00000000..cacc3b42
 +            browser_rect(16, y, 768, 50, .04f, .11f, .17f);
 +            if (entry->maximum) snprintf(text, sizeof(text), "%s  %d/%d", entry->name[0] ? entry->name : "Halo lobby", entry->players, entry->maximum);
 +            else snprintf(text, sizeof(text), "%s  ?/?", entry->name);
-+            browser_text_draw(24, y + 5, text, 53);
++            browser_text_draw(112, y + 5, entry->name[0] ? entry->name : "Halo lobby", 37);
++            if (entry->maximum) snprintf(text, sizeof(text), "%d/%d", entry->players, entry->maximum);
++            else snprintf(text, sizeof(text), "?/?");
++            browser_text_draw(580, y + 5, text, 7);
 +            snprintf(text, sizeof(text), "%s / %s", entry->map, entry->mode);
-+            browser_text_draw(24, y + 28, text, 53);
++            browser_text_draw(112, y + 26, text, 44);
++            browser_map_art(row, entry->map, 24, y + 5);
++            browser_rect(112, y + 44, 540, 3, .08f, .18f, .25f);
++            if (entry->maximum && entry->players > 0) browser_rect(112, y + 44, 540 * (entry->players < entry->maximum ? entry->players : entry->maximum) / entry->maximum, 3, .18f, .65f, .7f);
 +            browser_button(680, y + 5, entry->saved ? 56 : 96,
-+                entry->joinable && (!entry->maximum || entry->players < entry->maximum) ? (entry->saved ? "Go" : "Join") : (entry->saved ? "-" : "Closed"));
++                entry->joinable && (!entry->maximum || entry->players < entry->maximum) ? (p2p_browser_join_active() && !strcmp(browser_selected_invite, entry->invite) ? (entry->saved ? "End" : "Cancel") : (entry->saved ? "Go" : "Join")) : (entry->saved ? "-" : "Closed"));
 +            if (entry->saved) browser_button(740, y + 5, 40, "X");
 +        }
-+        browser_text_draw(16, 390, browser_notice[0] ? browser_notice : browser_view.status, 64);
++        browser_text_draw(16, 390, browser_notice, 64);
 +        browser_button(16, 420, 150, browser_view.public_game ? "Public: on" : "Private");
 +        browser_button(174, 420, 150, "Copy invite");
 +        browser_button(332, 420, 150, "Add invite");
@@ -1706,7 +1821,7 @@ index 68e32a0a..5695b519 100644
  	if (port == 0)
  	{
 diff --git a/source/interface/ui_widget.c b/source/interface/ui_widget.c
-index 6c0ba20b..03291d33 100644
+index 6c0ba20b..b75edee7 100644
 --- a/source/interface/ui_widget.c
 +++ b/source/interface/ui_widget.c
 @@ -677,6 +677,10 @@ struct widget_instance;
@@ -1720,7 +1835,7 @@ index 6c0ba20b..03291d33 100644
  
  /* ---------- constants */
  
-@@ -6997,6 +7001,64 @@ static boolean ui_check_for_pause_game(
+@@ -6997,6 +7001,74 @@ static boolean ui_check_for_pause_game(
  	return pause_pressed;
  }
  
@@ -1739,19 +1854,22 @@ index 6c0ba20b..03291d33 100644
 +        struct player_profile profile;
 +        waiting = FALSE;
 +        if (!main_menu_is_active()) {
++            p2p_browser_cancel_join();
 +            p2p_browser_message("Return to the main menu before joining another game.");
 +            return;
 +        }
 +        if (transport_initialize() != _transport_error_none) {
++            p2p_browser_cancel_join();
 +            p2p_browser_message("Could not start multiplayer networking. Restart Halo and try again."); return;
 +        }
-+        if (!p2p_join_invite(invite)) return;
++        if (!p2p_join_invite(invite)) { p2p_browser_cancel_join(); return; }
 +        memcpy(host, requested, sizeof(host));
 +        dispose_global_network_game_client();
 +        dispose_global_network_game_server();
 +        player_ui_clear_multiplayer_variant();
 +        if (!create_global_network_game_client()) {
 +            waiting = FALSE;
++            p2p_browser_cancel_join();
 +            p2p_browser_message("Could not create the lobby connection."); return;
 +        }
 +        game_connection_set(1);
@@ -1765,9 +1883,16 @@ index 6c0ba20b..03291d33 100644
 +        started = system_milliseconds(); waiting = TRUE;
 +    }
 +    if (!waiting) return;
-+    if (!global_network_game_client_get()) { waiting = FALSE; return; }
++    if (!p2p_browser_join_active()) {
++        waiting = FALSE;
++        dispose_global_network_game_client();
++        game_connection_set(0);
++        return;
++    }
++    if (!global_network_game_client_get()) { waiting = FALSE; p2p_browser_cancel_join(); return; }
 +    if (system_milliseconds() - started >= 60000) {
 +        waiting = FALSE;
++        p2p_browser_cancel_join();
 +        p2p_browser_message("Could not enter the selected lobby. Host offline or NAT blocked."); return;
 +    }
 +    if (network_game_client_join_invited_host(host)) {
@@ -1785,7 +1910,7 @@ index 6c0ba20b..03291d33 100644
  void process_ui_widgets(
  	void)
  {
-@@ -7012,6 +7074,9 @@ void process_ui_widgets(
+@@ -7012,6 +7084,9 @@ void process_ui_widgets(
  		644,
  		widget_globals.initialized);
  	widget_globals.current_system_milliseconds = system_milliseconds();
@@ -2093,10 +2218,10 @@ index 00000000..7e346071
 +}
 diff --git a/tools/test_browser_ui.c b/tools/test_browser_ui.c
 new file mode 100644
-index 00000000..4e2504b3
+index 00000000..ceb4e459
 --- /dev/null
 +++ b/tools/test_browser_ui.c
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,79 @@
 +/* UI interaction/render smoke test without copyrighted game assets.
 +   cc -Iport/linux/src tools/test_browser_ui.c -lSDL3 -lGL -o build/browser-ui-test
 +   SDL_VIDEODRIVER=offscreen build/browser-ui-test build/browser-preview.bmp */
@@ -2111,15 +2236,18 @@ index 00000000..4e2504b3
 +static struct { int mouse_released, ui_pointer; unsigned char keys[SDL_SCANCODE_COUNT], mouse_buttons[8]; float mouse_dx, mouse_dy; } input_state;
 +static unsigned char keys_pressed[SDL_SCANCODE_COUNT];
 +static struct p2p_browser_snapshot fixture;
-+static int published, joined, added, removed, reject_join;
++static int published, joined, added, removed, reject_join, join_active, cancelled;
 +void platform_mouse_capture(BOOL capture) { (void)capture; }
-+void p2p_browser_open(int open) { (void)open; }
++void p2p_browser_open(int open) { if (!open) { join_active = 0; cancelled++; } }
++int p2p_browser_join_active(void) { return join_active; }
++void p2p_browser_cancel_join(void) { join_active = 0; cancelled++; }
++const char *platform_save_root(void) { return "/tmp"; }
 +void p2p_browser_public(int enabled) { published = enabled; }
 +void p2p_browser_copy_invite(void) {}
 +void p2p_browser_snapshot(struct p2p_browser_snapshot *out) { *out = fixture; }
 +int p2p_browser_add_invite(const char *text) { added++; return text && *text; }
 +int p2p_browser_remove_invite(const char *text) { removed++; return text && *text; }
-+int p2p_browser_request_join(const char *text) { joined++; return !reject_join && text && *text; }
++int p2p_browser_request_join(const char *text) { joined++; join_active = !reject_join && text && *text; return join_active; }
 +#include "p2p_browser_ui.h"
 +int main(int argc, char **argv)
 +{
@@ -2136,15 +2264,17 @@ index 00000000..4e2504b3
 +    fixture.entries[1] = fixture.entries[0]; fixture.entries[1].players = 16; fixture.entries[1].joinable = 0;
 +    strcpy(fixture.entries[1].name, "Full lobby");
 +    fixture.entries[2] = fixture.entries[0]; fixture.entries[2].maximum = 0; fixture.entries[2].saved = 1;
-+    strcpy(fixture.entries[2].name, "Saved host 0123456789ab"); strcpy(fixture.entries[2].map, "Shared invite / count unknown"); fixture.entries[2].mode[0] = 0;
++    strcpy(fixture.entries[2].name, "Saved host 0123456789ab"); strcpy(fixture.entries[2].map, "Shared invite / count unknown"); fixture.entries[2].mode[0] = 0; strcpy(fixture.entries[2].invite, "halo://join/other");
 +    touch.type = SDL_EVENT_FINGER_DOWN; touch.tfinger.x = .9f; touch.tfinger.y = .05f;
 +    assert(browser_event(&touch) && browser_visible);
 +    browser_click(700, 120); assert(joined == 1);
-+    assert(strstr(browser_notice, "Connecting"));
++    assert(!browser_notice[0] && join_active);
++    browser_click(700, 120); assert(!join_active && cancelled);
++    browser_click(700, 120); assert(join_active && joined == 2);
 +    strcpy(fixture.status, "Connected. Open Multiplayer > System Link to enter the lobby.");
 +    browser_update_view(); assert(!browser_notice[0] && strstr(browser_view.status, "Connected"));
 +    fixture.status[0] = 0; reject_join = 1;
-+    browser_click(700, 120); assert(strstr(browser_notice, "Join rejected"));
++    join_active = 0; browser_click(700, 120); assert(strstr(browser_notice, "Could not join"));
 +    reject_join = 0; joined = 1;
 +    browser_click(700, 176); assert(joined == 1); /* full host is not joined */
 +    browser_click(700, 232); assert(joined == 2); /* saved host can be tried */
@@ -2159,7 +2289,10 @@ index 00000000..4e2504b3
 +    surface = SDL_CreateSurfaceFrom(800, 480, SDL_PIXELFORMAT_RGBA32, flipped, 3200); assert(surface);
 +    if (argc > 1) assert(SDL_SaveBMP(surface, argv[1]));
 +    SDL_DestroySurface(surface);
-+    touch.tfinger.y = .05f; assert(browser_event(&touch) && !browser_visible);
++    assert(join_active);
++    browser_click(700, 120); assert(join_active && !strcmp(browser_selected_invite, fixture.entries[0].invite));
++    touch.tfinger.y = .05f; assert(browser_event(&touch) && !browser_visible && !join_active);
++    assert(!browser_notice[0] && !browser_selected_invite[0]);
 +    input_state.ui_pointer = 0;
 +    assert(!browser_event(&touch) && !browser_visible); /* gameplay does not open invisible button */
 +    input_state.ui_pointer = 1; browser_show(1);
