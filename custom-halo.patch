@@ -1118,7 +1118,7 @@ index 00000000..d08d8564
 +#endif
 diff --git a/port/linux/src/p2p_browser_ui.h b/port/linux/src/p2p_browser_ui.h
 new file mode 100644
-index 00000000..1d7cc4ea
+index 00000000..cacc3b42
 --- /dev/null
 +++ b/port/linux/src/p2p_browser_ui.h
 @@ -0,0 +1,261 @@
@@ -1350,7 +1350,7 @@ index 00000000..1d7cc4ea
 +    }
 +    else
 +    {
-+        browser_text_draw(16, 56, !browser_view.online ? "Internet play is off or could not start." :
++        browser_text_draw(16, 56, !browser_view.online ? "Choose a server and tap Join to connect." :
 +            browser_view.count ? "Live listings - host-reported counts - updates every 10s" :
 +            !browser_view.connected ? "Connecting to discovery brokers..." : "Live listings - host-reported counts - updates every 10s", 64);
 +        if (!browser_view.count)
