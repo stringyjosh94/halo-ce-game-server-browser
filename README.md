@@ -8,7 +8,7 @@ Halo CE Browser brings community multiplayer listings directly into Halo: Combat
 
 ## What you get
 
-- **An in-game server browser:** community listings from [Halo Milenko](https://halo.milenko.org/) alongside broker-discovered rooms and saved invites.
+- **An in-game server browser:** community listings from [Puma @ Milenko.org](https://halo.milenko.org/) alongside broker-discovered rooms and saved invites.
 - **Lobby details before joining:** reported player counts, map and game mode help you choose a game. Full, closed and incompatible listings are blocked from joining.
 - **Join with a tap:** multiplayer networking starts automatically, connects to the selected host, and opens the lobby.
 - **A clear screen while playing:** the Servers button hides during gameplay and returns in the menus.
