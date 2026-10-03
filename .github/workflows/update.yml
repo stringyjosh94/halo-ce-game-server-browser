@@ -3,9 +3,6 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '23 */6 * * *'
-  push:
-    branches: [main]
-    paths: ['custom-halo.patch', 'tools/update.py', '.github/workflows/update.yml']
 permissions:
   contents: write
 concurrency:
@@ -19,7 +16,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
-      - name: Check cybersecurity release and our patch
+      - name: Check for a newer cybersecurity Android release
         id: probe
         run: python3 tools/update.py probe
       - uses: actions/setup-java@v5
