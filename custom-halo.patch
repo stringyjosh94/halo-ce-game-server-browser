@@ -599,7 +599,7 @@ index fa56e089..8fefde0a 100644
       * Android's package installer, with the new app: it asks the player to
       * allow this app to install apps the first time, replaces the game
 diff --git a/port/android/guest/runtime/guest_host.h b/port/android/guest/runtime/guest_host.h
-index 2c18715a..3decd527 100644
+index 5a9babaf..fa92db1e 100644
 --- a/port/android/guest/runtime/guest_host.h
 +++ b/port/android/guest/runtime/guest_host.h
 @@ -58,6 +58,7 @@ void host_sdl_get_error(char *buffer, unsigned int size);
@@ -611,10 +611,10 @@ index 2c18715a..3decd527 100644
  int host_sdl_set_relative_mouse(unsigned int window, int enabled);
  int host_sdl_gl_set_attribute(int attribute, int value);
 diff --git a/port/android/guest/runtime/guest_sdl.c b/port/android/guest/runtime/guest_sdl.c
-index ac775a6d..d72c0c01 100644
+index 7bd89689..7f90a40d 100644
 --- a/port/android/guest/runtime/guest_sdl.c
 +++ b/port/android/guest/runtime/guest_sdl.c
-@@ -98,6 +98,15 @@ SDL_Window *SDL_CreateWindow(const char *title, int width, int height, SDL_Windo
+@@ -111,6 +111,15 @@ SDL_Window *SDL_CreateWindow(const char *title, int width, int height, SDL_Windo
  	return (SDL_Window *)host_sdl_create_window(title, width, height, (long long)flags);
  }
  
@@ -631,10 +631,10 @@ index ac775a6d..d72c0c01 100644
  {
  	int w = 0, h = 0;
 diff --git a/port/android/host/host_sdl.c b/port/android/host/host_sdl.c
-index 368705b2..f2909db5 100644
+index 0167e453..2117bd8c 100644
 --- a/port/android/host/host_sdl.c
 +++ b/port/android/host/host_sdl.c
-@@ -115,6 +115,13 @@ uint32_t host_sdl_create_window(const char *title, int width, int height, int64_
+@@ -125,6 +125,13 @@ uint32_t host_sdl_create_window(const char *title, int width, int height, int64_
  	return handle_new(_handle_window, SDL_CreateWindow(title, width, height, (SDL_WindowFlags)flags));
  }
  
@@ -649,7 +649,7 @@ index 368705b2..f2909db5 100644
  {
  	SDL_Window *object = handle_get(window, _handle_window);
 diff --git a/port/android/host_imports.list b/port/android/host_imports.list
-index 2888fe99..b26fb9df 100644
+index bb00cc89..483b31b5 100644
 --- a/port/android/host_imports.list
 +++ b/port/android/host_imports.list
 @@ -19,6 +19,7 @@ host_sdl_get_error
@@ -661,20 +661,19 @@ index 2888fe99..b26fb9df 100644
  host_sdl_set_relative_mouse
  host_sdl_gl_set_attribute
 diff --git a/port/linux/src/d3d8_gl.c b/port/linux/src/d3d8_gl.c
-index 06ff2b24..77878382 100644
+index 43c924d2..53c9e661 100644
 --- a/port/linux/src/d3d8_gl.c
 +++ b/port/linux/src/d3d8_gl.c
-@@ -1154,7 +1154,7 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void
+@@ -1154,6 +1154,7 @@ HRESULT WINAPI Direct3D_CreateDevice(UINT adapter, D3DDEVTYPE device_type, void
  #ifdef HALO_ANDROID
  int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
  {
--	(void)menus_active;
 +	platform_ui_pointer_set_active(menus_active != 0);
  	(void)pointer;
+ 	platform_menus_set_active(menus_active != 0);
  	return 0;
- }
 diff --git a/port/linux/src/p2p.c b/port/linux/src/p2p.c
-index cbecc337..a228c6f5 100644
+index cf9382dc..96131a51 100644
 --- a/port/linux/src/p2p.c
 +++ b/port/linux/src/p2p.c
 @@ -57,6 +57,11 @@ only look up and create stand-ins.
@@ -689,7 +688,7 @@ index cbecc337..a228c6f5 100644
  #include "ikcp.h"
  
  #include <stddef.h>
-@@ -315,7 +320,13 @@ static struct
+@@ -317,7 +322,13 @@ static struct
  	int has_token;
  	unsigned char token[P2P_TOKEN_SIZE];
  	char invite[P2P_LINK_SIZE];
@@ -704,7 +703,7 @@ index cbecc337..a228c6f5 100644
  	/* the game's players and its most (p2p_set_game_player_counts; 0: not
  	said, and the machines the tunnel reaches are shown), and what Discord
  	was told */
-@@ -1034,6 +1045,7 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short
+@@ -1036,6 +1047,7 @@ static void peer_heard(struct peer *peer, unsigned long address, unsigned short
  				p2p.joining = 0;
  				p2p_signal_stop_joining();
  			}
@@ -712,7 +711,7 @@ index cbecc337..a228c6f5 100644
  			platform_log("Internet play: the host's game is listed under Multiplayer, System Link");
  		}
  	}
-@@ -2298,6 +2310,7 @@ static int join_invite(const char *text)
+@@ -2300,6 +2312,7 @@ static int join_invite(const char *text)
  	memcpy(p2p.join_host_hash, hash, sizeof(hash));
  	memcpy(p2p.join_token, token, sizeof(token));
  	p2p.join_requested = 1;
@@ -720,7 +719,7 @@ index cbecc337..a228c6f5 100644
  	return 1;
  }
  
-@@ -2307,13 +2320,72 @@ int p2p_join_invite(const char *text)
+@@ -2309,13 +2322,72 @@ int p2p_join_invite(const char *text)
  
  	p2p_identifier();
  	pthread_mutex_lock(&p2p_lock);
@@ -793,7 +792,7 @@ index cbecc337..a228c6f5 100644
  void p2p_invite_received(const char *text)
  {
  	/* (an older version's is logged as such) */
-@@ -2343,6 +2415,7 @@ static void update_joining(void)
+@@ -2345,6 +2417,7 @@ static void update_joining(void)
  	{
  		p2p.joining = 0;
  		p2p_signal_stop_joining();
@@ -801,7 +800,7 @@ index cbecc337..a228c6f5 100644
  		platform_log("Internet play: no answer from the invite's host; it may have stopped hosting or quit");
  	}
  }
-@@ -2384,12 +2457,6 @@ static void update_hosting(void)
+@@ -2386,12 +2459,6 @@ static void update_hosting(void)
  		p2p_signal_host(p2p.token);
  		platform_log("Internet play: hosting. Invite players with this link (it only works while this "
  			"copy of the game runs): %s", p2p.invite);
@@ -814,7 +813,7 @@ index cbecc337..a228c6f5 100644
  		p2p.reported_player_count = -1;
  	}
  	else if (!want && p2p.hosting)
-@@ -2397,6 +2464,7 @@ static void update_hosting(void)
+@@ -2399,6 +2466,7 @@ static void update_hosting(void)
  		p2p.hosting = 0;
  		p2p_signal_stop_hosting();
  		p2p_discord_set_hosting(NULL, 0, 0);
@@ -822,7 +821,7 @@ index cbecc337..a228c6f5 100644
  	}
  	if (p2p.hosting)
  	{
-@@ -2405,6 +2473,18 @@ static void update_hosting(void)
+@@ -2407,6 +2475,18 @@ static void update_hosting(void)
  		int count = p2p.game_player_maximum > 0 ? p2p.game_player_count : connected_player_count() + 1;
  		int maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : P2P_MAXIMUM_PEERS + 1;
  
@@ -841,7 +840,7 @@ index cbecc337..a228c6f5 100644
  		if (count != p2p.reported_player_count || maximum != p2p.reported_player_maximum)
  		{
  			p2p.reported_player_count = count;
-@@ -2887,6 +2967,7 @@ static void *p2p_thread(void *unused)
+@@ -2907,6 +2987,7 @@ static void *p2p_thread(void *unused)
  		update_peers();
  		expire_proxies();
  		stun_update();
@@ -849,7 +848,7 @@ index cbecc337..a228c6f5 100644
  		update_hosting();
  		update_joining();
  		update_upnp();
-@@ -2956,3 +3037,185 @@ void p2p_initialize(unsigned long local_address)
+@@ -2976,3 +3057,185 @@ void p2p_initialize(unsigned long local_address)
  	if (command_line_invite(invite, sizeof(invite)))
  		p2p_join_invite(invite);
  }
@@ -1036,7 +1035,7 @@ index cbecc337..a228c6f5 100644
 +    pthread_mutex_unlock(&p2p_lock);
 +}
 diff --git a/port/linux/src/p2p.h b/port/linux/src/p2p.h
-index d423532a..31fe9037 100644
+index c8c6ccb4..54ccf2e6 100644
 --- a/port/linux/src/p2p.h
 +++ b/port/linux/src/p2p.h
 @@ -25,6 +25,11 @@ int p2p_hand_off_invite(void);
@@ -1051,7 +1050,7 @@ index d423532a..31fe9037 100644
  
  /* this machine's identifier, which its XNADDR carries (6 bytes) */
  const unsigned char *p2p_identifier(void);
-@@ -104,5 +109,28 @@ void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
+@@ -112,5 +117,28 @@ void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
  virtual address (network byte order): where its packets come from; 0 if
  it is no peer's */
  unsigned long p2p_peer_endpoint_address(unsigned long virtual_address);
@@ -1693,10 +1692,10 @@ index 7906b9f3..c2f4c67d 100644
 +    return count;
 +}
 diff --git a/port/linux/src/port_config.c b/port/linux/src/port_config.c
-index 88b0048a..aac8806f 100644
+index f03e37d6..a8ad002a 100644
 --- a/port/linux/src/port_config.c
 +++ b/port/linux/src/port_config.c
-@@ -155,10 +155,10 @@ static const struct config_setting config_settings[] =
+@@ -216,10 +216,10 @@ static const struct config_setting config_settings[] =
  		"instead of the local network's broadcast address (for VPNs); empty for\n"
  		"the local network." },
  	{ "network.online", _config_boolean, "true", "HALO_NET_ONLINE", _environment_value, _platform_all,
@@ -1712,10 +1711,10 @@ index 88b0048a..aac8806f 100644
  		_platform_all,
  		"Join the game of an invite link found on the clipboard when the game\n"
 diff --git a/port/linux/src/sdl_platform.c b/port/linux/src/sdl_platform.c
-index 84ef2ef2..721ad139 100644
+index e7f7e102..18c5883f 100644
 --- a/port/linux/src/sdl_platform.c
 +++ b/port/linux/src/sdl_platform.c
-@@ -435,6 +435,8 @@ void platform_video_drawable_size(int *width, int *height)
+@@ -536,6 +536,8 @@ void platform_video_drawable_size(int *width, int *height)
  	SDL_GetWindowSizeInPixels(platform_window, width, height);
  }
  
@@ -1724,7 +1723,7 @@ index 84ef2ef2..721ad139 100644
  #ifndef HALO_ANDROID
  /* with vsync off, the time between frames display.max_fps asks for (0:
  twice the display's refresh rate), or 0 for no limit. A GPU never left idle
-@@ -472,6 +474,7 @@ void platform_video_swap(void)
+@@ -575,6 +577,7 @@ void platform_video_swap(void)
  	Uint64 interval, now;
  
  #endif
@@ -1732,7 +1731,7 @@ index 84ef2ef2..721ad139 100644
  	SDL_GL_SwapWindow(platform_window);
  #ifndef HALO_ANDROID
  	interval = frame_interval_ns();
-@@ -809,6 +812,7 @@ void platform_pump_events(void)
+@@ -943,6 +946,7 @@ void platform_pump_events(void)
  	pthread_mutex_lock(&input_lock);
  	while (SDL_PollEvent(&event))
  	{
@@ -1740,7 +1739,7 @@ index 84ef2ef2..721ad139 100644
  		switch (event.type)
  		{
  		case SDL_EVENT_QUIT:
-@@ -929,7 +933,7 @@ void platform_pump_events(void)
+@@ -1102,7 +1106,7 @@ void platform_pump_events(void)
  			input_state.focused = TRUE;
  			look_at_clipboard = TRUE;
  #ifndef HALO_ANDROID
@@ -1749,16 +1748,16 @@ index 84ef2ef2..721ad139 100644
  				platform_mouse_capture(TRUE);
  #endif
  			break;
-@@ -964,7 +968,7 @@ void platform_ui_pointer_set_active(BOOL active)
- 	input_state.mouse_wheel = 0.0f;
+@@ -1170,7 +1174,7 @@ void platform_ui_pointer_set_active(BOOL active)
  	memset(input_state.mouse_buttons, 0, sizeof(input_state.mouse_buttons));
+ 	memset(mouse_buttons_pressed, 0, sizeof(mouse_buttons_pressed));
  	pthread_mutex_unlock(&input_lock);
 -	platform_mouse_capture(!active && !input_state.mouse_released);
 +	platform_mouse_capture(!active && !browser_visible && !input_state.mouse_released);
  	if (active)
  	{
  		int width, height;
-@@ -999,6 +1003,13 @@ void platform_video_window_size(int *width, int *height)
+@@ -1205,6 +1209,13 @@ void platform_video_window_size(int *width, int *height)
  	SDL_GetWindowSize(platform_window, width, height);
  }
  
@@ -1772,7 +1771,7 @@ index 84ef2ef2..721ad139 100644
  #endif
  void platform_input_read(struct platform_input_state *state, BOOL consume_motion)
  {
-@@ -1022,3 +1033,7 @@ void platform_input_read(struct platform_input_state *state, BOOL consume_motion
+@@ -1264,3 +1275,7 @@ void platform_input_read(struct platform_input_state *state, BOOL consume_motion
  	}
  	pthread_mutex_unlock(&input_lock);
  }
@@ -1781,10 +1780,10 @@ index 84ef2ef2..721ad139 100644
 +
 +void platform_browser_close(void) { browser_show(0); }
 diff --git a/port/linux/src/sdl_platform.h b/port/linux/src/sdl_platform.h
-index f2361790..49983339 100644
+index 6ecd3b36..5024f253 100644
 --- a/port/linux/src/sdl_platform.h
 +++ b/port/linux/src/sdl_platform.h
-@@ -49,6 +49,7 @@ void platform_mouse_capture(BOOL capture);
+@@ -76,6 +76,7 @@ void platform_mouse_capture(BOOL capture);
  void platform_pump_events(void);
  /* a snapshot of the input state; consume_motion resets the mouse deltas */
  void platform_input_read(struct platform_input_state *state, BOOL consume_motion);
@@ -1792,7 +1791,7 @@ index f2361790..49983339 100644
  #ifndef HALO_ANDROID
  /* the pointer in the menus (d3d8_gl.c, halo_ui_pointer_update) */
  struct platform_ui_pointer
-@@ -60,7 +61,6 @@ struct platform_ui_pointer
+@@ -87,7 +88,6 @@ struct platform_ui_pointer
  	int left_clicks, right_clicks;
  	int wheel_steps;
  };
@@ -1800,7 +1799,7 @@ index f2361790..49983339 100644
  BOOL platform_ui_pointer_read(struct platform_ui_pointer *pointer);
  void platform_video_window_size(int *width, int *height);
  #endif
-@@ -70,4 +70,7 @@ mouse wheel and Page Up/Down scroll it instead of switching weapons; how
+@@ -97,4 +97,7 @@ mouse wheel and Page Up/Down scroll it instead of switching weapons; how
  far they moved it since the last call (notches and pages, down positive) */
  void platform_scoreboard_scroll(int open, long *notches, long *pages);
  
@@ -1809,10 +1808,10 @@ index f2361790..49983339 100644
 +
  #endif
 diff --git a/port/linux/src/xinput_sdl.c b/port/linux/src/xinput_sdl.c
-index 68e32a0a..5695b519 100644
+index 06672577..c88af473 100644
 --- a/port/linux/src/xinput_sdl.c
 +++ b/port/linux/src/xinput_sdl.c
-@@ -535,6 +535,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
+@@ -796,6 +796,7 @@ DWORD WINAPI XInputGetState(HANDLE device, PXINPUT_STATE state)
  	if (port < 0)
  		return ERROR_DEVICE_NOT_CONNECTED;
  	platform_pump_events();
@@ -1821,7 +1820,7 @@ index 68e32a0a..5695b519 100644
  	if (port == 0)
  	{
 diff --git a/source/interface/ui_widget.c b/source/interface/ui_widget.c
-index 6c0ba20b..b75edee7 100644
+index f5502acb..9c621a3c 100644
 --- a/source/interface/ui_widget.c
 +++ b/source/interface/ui_widget.c
 @@ -677,6 +677,10 @@ struct widget_instance;
@@ -1835,7 +1834,7 @@ index 6c0ba20b..b75edee7 100644
  
  /* ---------- constants */
  
-@@ -6997,6 +7001,74 @@ static boolean ui_check_for_pause_game(
+@@ -7276,6 +7280,74 @@ static boolean ui_check_for_pause_game(
  	return pause_pressed;
  }
  
@@ -1910,7 +1909,7 @@ index 6c0ba20b..b75edee7 100644
  void process_ui_widgets(
  	void)
  {
-@@ -7012,6 +7084,9 @@ void process_ui_widgets(
+@@ -7291,6 +7363,9 @@ void process_ui_widgets(
  		644,
  		widget_globals.initialized);
  	widget_globals.current_system_milliseconds = system_milliseconds();
@@ -1921,7 +1920,7 @@ index 6c0ba20b..b75edee7 100644
  	if (widget_globals.initialization_thread)
  	{
 diff --git a/source/networking/network_client_manager.c b/source/networking/network_client_manager.c
-index a40d50f9..e7073af9 100644
+index 35cac6bb..5b2ca547 100644
 --- a/source/networking/network_client_manager.c
 +++ b/source/networking/network_client_manager.c
 @@ -392,6 +392,11 @@ symbols in this file:
@@ -1955,7 +1954,7 @@ index a40d50f9..e7073af9 100644
  		advertised_game->unknown100 = advertisement->unknown100;
  		advertised_game->open = open;
  		advertised_game->has_teams = TEST_FLAG(
-@@ -3053,6 +3070,48 @@ boolean network_game_client_join_first_available_game(
+@@ -3065,6 +3082,48 @@ boolean network_game_client_join_first_available_game(
  	return FALSE;
  }
  
@@ -2005,7 +2004,7 @@ index a40d50f9..e7073af9 100644
  teams), as the pregame screen's team choice does; NONE: the other team from
  another machine's player */
 diff --git a/source/networking/network_client_manager.h b/source/networking/network_client_manager.h
-index 5d1fdc2a..e1be04ad 100644
+index 3ef12727..ee0568f7 100644
 --- a/source/networking/network_client_manager.h
 +++ b/source/networking/network_client_manager.h
 @@ -35,6 +35,7 @@ void network_game_client_keep_alive(
@@ -2017,10 +2016,10 @@ index 5d1fdc2a..e1be04ad 100644
  	void);
  boolean network_game_client_set_team(
 diff --git a/source/networking/network_server_manager.c b/source/networking/network_server_manager.c
-index 40791743..bd1bc4b6 100644
+index 238e0631..92c965e8 100644
 --- a/source/networking/network_server_manager.c
 +++ b/source/networking/network_server_manager.c
-@@ -475,6 +475,7 @@ symbols in this file:
+@@ -476,6 +476,7 @@ symbols in this file:
  
  /* port: internet play's Discord presence (port/linux/src/p2p.c) */
  void p2p_set_game_player_counts(int count, int maximum);
@@ -2028,7 +2027,7 @@ index 40791743..bd1bc4b6 100644
  
  /* ---------- constants */
  
-@@ -1320,6 +1321,22 @@ boolean network_game_server_idle(
+@@ -1328,6 +1329,22 @@ boolean network_game_server_idle(
  	}
  
  	/* (what Discord shows of a game hosted for internet play) */
