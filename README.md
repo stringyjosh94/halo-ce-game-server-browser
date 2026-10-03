@@ -4,7 +4,7 @@
 
 Halo CE Browser brings community multiplayer listings directly into Halo: Combat Evolved on Android. Open **Servers**, see the available lobbies, and join from inside the game—without copying an invite into another app or navigating to System Link yourself.
 
-[**Download the latest APK**](https://github.com/stringyjosh94/halo-ce-game-server-browser/releases/latest) · [Report a problem](https://github.com/stringyjosh94/halo-ce-game-server-browser/issues) · [Build and update guide](docs/BUILDING.md)
+[**Download the latest APK**](https://github.com/stringyjosh94/halo-ce-game-server-browser/releases/latest) · [Report a problem](https://github.com/stringyjosh94/halo-ce-game-server-browser/issues) · 
 
 ## What you get
 
