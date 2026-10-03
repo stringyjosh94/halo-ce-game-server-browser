@@ -81,7 +81,7 @@ index 00000000..17879703
 +SDL_VIDEODRIVER=offscreen build/browser-ui-test build/browser-preview.bmp
 +```
 diff --git a/port/android/app/build.gradle b/port/android/app/build.gradle
-index 97b47577..792db464 100644
+index 97b47577..767ba772 100644
 --- a/port/android/app/build.gradle
 +++ b/port/android/app/build.gradle
 @@ -15,6 +15,16 @@ def buildNumber = buildNumberText.isInteger() ? buildNumberText.toInteger() : 0
@@ -92,7 +92,7 @@ index 97b47577..792db464 100644
 +
 +def networkVersion = new File(rootDir, "../linux/include/halo_port_limits.h").text.find(/HALO_PORT_NETWORK_VERSION\s+(\d+)/) { match, number -> number }
 +
-+def browserVersion = (System.getenv("HALO_BROWSER_VERSION_CODE") ?: "6").toInteger()
++def browserVersion = (System.getenv("HALO_BROWSER_VERSION_CODE") ?: "7").toInteger()
 +def upstreamBuild = (System.getenv("HALO_UPSTREAM_BUILD") ?: "74").toInteger()
 +
 +def updateRepository = System.getenv("HALO_BROWSER_UPDATE_REPOSITORY") ?: ""
@@ -611,7 +611,7 @@ index 06ff2b24..77878382 100644
  	return 0;
  }
 diff --git a/port/linux/src/p2p.c b/port/linux/src/p2p.c
-index cbecc337..56943182 100644
+index cbecc337..4182d7eb 100644
 --- a/port/linux/src/p2p.c
 +++ b/port/linux/src/p2p.c
 @@ -57,6 +57,11 @@ only look up and create stand-ins.
@@ -657,12 +657,12 @@ index cbecc337..56943182 100644
  	return 1;
  }
  
-@@ -2307,13 +2320,52 @@ int p2p_join_invite(const char *text)
+@@ -2307,13 +2320,57 @@ int p2p_join_invite(const char *text)
  
  	p2p_identifier();
  	pthread_mutex_lock(&p2p_lock);
 +    if (!p2p.running) {
-+        snprintf(p2p.browser_status, sizeof(p2p.browser_status), "Internet play is off. Enable network.online in config.toml.");
++        snprintf(p2p.browser_status, sizeof(p2p.browser_status), config_boolean("network.online") ? "Internet networking could not start. Restart Halo and try again." : "Internet play is off. Enable network.online in config.toml.");
 +        pthread_mutex_unlock(&p2p_lock);
 +        return 0;
 +    }
@@ -676,10 +676,13 @@ index cbecc337..56943182 100644
  
 +static unsigned char browser_autojoin_host[P2P_IDENTIFIER_SIZE];
 +static int browser_autojoin_pending;
++static char browser_autojoin_invite[256];
 +int p2p_browser_request_join(const char *text)
 +{
 +    unsigned char hash[P2P_KEY_HASH_SIZE], token[P2P_TOKEN_SIZE], host[P2P_IDENTIFIER_SIZE];
-+    if (parse_invite(text, hash, token) != 1 || !p2p_join_invite(text)) return 0;
++    if (parse_invite(text, hash, token) != 1) { p2p_browser_message("Invalid or incompatible invite. Try another server."); return 0; }
++    if (!config_boolean("network.online")) { p2p_browser_message("Internet play is off. Enable network.online in config.toml."); return 0; }
++    p2p_identifier();
 +    p2p_identifier_from_hash(hash, host);
 +    pthread_mutex_lock(&p2p_lock);
 +    if (!memcmp(host, identifier, sizeof(host))) {
@@ -687,16 +690,18 @@ index cbecc337..56943182 100644
 +        pthread_mutex_unlock(&p2p_lock); return 0;
 +    }
 +    memcpy(browser_autojoin_host, host, sizeof(browser_autojoin_host));
++    snprintf(browser_autojoin_invite, sizeof(browser_autojoin_invite), "%s", text);
++    snprintf(p2p.browser_status, sizeof(p2p.browser_status), "Starting internet networking...");
 +    browser_autojoin_pending = 1;
 +    pthread_mutex_unlock(&p2p_lock);
 +    return 1;
 +}
-+int p2p_browser_take_autojoin(unsigned char *host)
++int p2p_browser_take_autojoin(unsigned char *host, char *invite)
 +{
 +    int pending;
 +    pthread_mutex_lock(&p2p_lock);
 +    pending = browser_autojoin_pending;
-+    if (pending) { memcpy(host, browser_autojoin_host, sizeof(browser_autojoin_host)); browser_autojoin_pending = 0; }
++    if (pending) { memcpy(host, browser_autojoin_host, sizeof(browser_autojoin_host)); memcpy(invite, browser_autojoin_invite, sizeof(browser_autojoin_invite)); browser_autojoin_pending = 0; }
 +    pthread_mutex_unlock(&p2p_lock);
 +    return pending;
 +}
@@ -710,7 +715,7 @@ index cbecc337..56943182 100644
  void p2p_invite_received(const char *text)
  {
  	/* (an older version's is logged as such) */
-@@ -2343,6 +2395,7 @@ static void update_joining(void)
+@@ -2343,6 +2400,7 @@ static void update_joining(void)
  	{
  		p2p.joining = 0;
  		p2p_signal_stop_joining();
@@ -718,7 +723,7 @@ index cbecc337..56943182 100644
  		platform_log("Internet play: no answer from the invite's host; it may have stopped hosting or quit");
  	}
  }
-@@ -2384,12 +2437,6 @@ static void update_hosting(void)
+@@ -2384,12 +2442,6 @@ static void update_hosting(void)
  		p2p_signal_host(p2p.token);
  		platform_log("Internet play: hosting. Invite players with this link (it only works while this "
  			"copy of the game runs): %s", p2p.invite);
@@ -731,7 +736,7 @@ index cbecc337..56943182 100644
  		p2p.reported_player_count = -1;
  	}
  	else if (!want && p2p.hosting)
-@@ -2397,6 +2444,7 @@ static void update_hosting(void)
+@@ -2397,6 +2449,7 @@ static void update_hosting(void)
  		p2p.hosting = 0;
  		p2p_signal_stop_hosting();
  		p2p_discord_set_hosting(NULL, 0, 0);
@@ -739,7 +744,7 @@ index cbecc337..56943182 100644
  	}
  	if (p2p.hosting)
  	{
-@@ -2405,6 +2453,18 @@ static void update_hosting(void)
+@@ -2405,6 +2458,18 @@ static void update_hosting(void)
  		int count = p2p.game_player_maximum > 0 ? p2p.game_player_count : connected_player_count() + 1;
  		int maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : P2P_MAXIMUM_PEERS + 1;
  
@@ -758,7 +763,7 @@ index cbecc337..56943182 100644
  		if (count != p2p.reported_player_count || maximum != p2p.reported_player_maximum)
  		{
  			p2p.reported_player_count = count;
-@@ -2887,6 +2947,7 @@ static void *p2p_thread(void *unused)
+@@ -2887,6 +2952,7 @@ static void *p2p_thread(void *unused)
  		update_peers();
  		expire_proxies();
  		stun_update();
@@ -766,7 +771,7 @@ index cbecc337..56943182 100644
  		update_hosting();
  		update_joining();
  		update_upnp();
-@@ -2956,3 +3017,184 @@ void p2p_initialize(unsigned long local_address)
+@@ -2956,3 +3022,184 @@ void p2p_initialize(unsigned long local_address)
  	if (command_line_invite(invite, sizeof(invite)))
  		p2p_join_invite(invite);
  }
@@ -952,7 +957,7 @@ index cbecc337..56943182 100644
 +    pthread_mutex_unlock(&p2p_lock);
 +}
 diff --git a/port/linux/src/p2p.h b/port/linux/src/p2p.h
-index d423532a..7c73633f 100644
+index d423532a..ab0573e9 100644
 --- a/port/linux/src/p2p.h
 +++ b/port/linux/src/p2p.h
 @@ -25,6 +25,9 @@ int p2p_hand_off_invite(void);
@@ -960,7 +965,7 @@ index d423532a..7c73633f 100644
  words around it. Returns nonzero if it held an invite */
  int p2p_join_invite(const char *text);
 +int p2p_browser_request_join(const char *text);
-+int p2p_browser_take_autojoin(unsigned char *host);
++int p2p_browser_take_autojoin(unsigned char *host, char *invite);
 +void p2p_browser_message(const char *text);
  
  /* this machine's identifier, which its XNADDR carries (6 bytes) */
@@ -1701,7 +1706,7 @@ index 68e32a0a..5695b519 100644
  	if (port == 0)
  	{
 diff --git a/source/interface/ui_widget.c b/source/interface/ui_widget.c
-index 6c0ba20b..9f3eeb42 100644
+index 6c0ba20b..f1bd4987 100644
 --- a/source/interface/ui_widget.c
 +++ b/source/interface/ui_widget.c
 @@ -677,6 +677,10 @@ struct widget_instance;
@@ -1715,24 +1720,32 @@ index 6c0ba20b..9f3eeb42 100644
  
  /* ---------- constants */
  
-@@ -6997,6 +7001,56 @@ static boolean ui_check_for_pause_game(
+@@ -6997,6 +7001,64 @@ static boolean ui_check_for_pause_game(
  	return pause_pressed;
  }
  
 +#ifdef HALO_LINUX_PLATFORM_LAYER
++
++#include "bungie_net/network/transport.h"
 +static void ui_browser_autojoin_update(void)
 +{
 +    static unsigned char host[6];
 +    static boolean waiting;
 +    static unsigned long started;
 +    unsigned char requested[6];
-+    if (p2p_browser_take_autojoin(requested)) {
++    char invite[256];
++    if (p2p_browser_take_autojoin(requested, invite)) {
 +        long profile_index;
 +        struct player_profile profile;
++        waiting = FALSE;
 +        if (!main_menu_is_active()) {
 +            p2p_browser_message("Return to the main menu before joining another game.");
 +            return;
 +        }
++        if (transport_initialize() != _transport_error_none) {
++            p2p_browser_message("Could not start multiplayer networking. Restart Halo and try again."); return;
++        }
++        if (!p2p_join_invite(invite)) return;
 +        memcpy(host, requested, sizeof(host));
 +        dispose_global_network_game_client();
 +        dispose_global_network_game_server();
@@ -1772,7 +1785,7 @@ index 6c0ba20b..9f3eeb42 100644
  void process_ui_widgets(
  	void)
  {
-@@ -7012,6 +7066,9 @@ void process_ui_widgets(
+@@ -7012,6 +7074,9 @@ void process_ui_widgets(
  		644,
  		widget_globals.initialized);
  	widget_globals.current_system_milliseconds = system_milliseconds();
