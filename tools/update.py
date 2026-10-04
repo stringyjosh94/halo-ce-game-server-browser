@@ -50,13 +50,30 @@ def probe():
         if match is None:
             raise RuntimeError('Cannot identify the upstream build in the latest custom release notes; refusing an unnecessary rebuild')
         published_tag = match.group(1)
-    build = previous is None or int(tag[6:]) > int(published_tag[6:])
+    force = (os.environ.get('GITHUB_EVENT_NAME') == 'workflow_dispatch'
+             and os.environ.get('FORCE_REBUILD', '').lower() == 'true')
+    build = force or previous is None or int(tag[6:]) > int(published_tag[6:])
+    if force: print('Manual rebuild requested for upstream ' + tag)
     print('New upstream Android release: ' + tag if build else 'No newer upstream Android release; skipping APK build')
     output('build', str(build).lower()); output('upstream', tag); output('fingerprint', fingerprint)
     (ROOT / 'upstream.json').write_text(json.dumps({'tag': tag, 'url': release['html_url'], 'fingerprint': fingerprint}, indent=2))
 
 def run(args, cwd, env):
     subprocess.run(args, cwd=cwd, env=env, check=True)
+
+def next_version():
+    # Stay newer than the distributed local test APK and previous releases.
+    version = max(1000103, 1000000 + int(os.environ['GITHUB_RUN_NUMBER']))
+    try:
+        previous = api('repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases/latest')
+    except urllib.error.HTTPError as error:
+        if error.code != 404: raise
+    else:
+        match = re.fullmatch(r'build-([1-9][0-9]*)', previous['tag_name'])
+        if match is None: raise RuntimeError('Unrecognized custom release version')
+        version = max(version, int(match.group(1)) + 1)
+    if version > 2100000000: raise RuntimeError('Version code too large')
+    return version
 
 def build():
     tag = os.environ['UPSTREAM_TAG']; repository = os.environ['GITHUB_REPOSITORY']
@@ -67,8 +84,7 @@ def build():
          'https://github.com/' + UPSTREAM + '.git', str(source)], ROOT, env)
     run(['git', 'apply', '--3way', str(ROOT / 'custom-halo.patch')], source, env)
     # A clean conflict-free patch is required. Errors abort before publication.
-    version = 1000000 + int(os.environ['GITHUB_RUN_NUMBER'])
-    if version > 2100000000: raise RuntimeError('Version code too large')
+    version = next_version()
     env.update(HALO_BROWSER_VERSION_CODE=str(version), HALO_UPSTREAM_BUILD=tag[6:],
                HALO_BROWSER_UPDATE_REPOSITORY=repository,
                HALO_ANDROID_KEY_ALIAS='androiddebugkey')

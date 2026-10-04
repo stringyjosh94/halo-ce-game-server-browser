@@ -161,10 +161,10 @@ index 08d788e9..6be219cf 100644
  
 diff --git a/port/android/app/src/main/java/com/halo/decomp/CommunityDirectoryClient.java b/port/android/app/src/main/java/com/halo/decomp/CommunityDirectoryClient.java
 new file mode 100644
-index 00000000..0db976b1
+index 00000000..18cddb8e
 --- /dev/null
 +++ b/port/android/app/src/main/java/com/halo/decomp/CommunityDirectoryClient.java
-@@ -0,0 +1,176 @@
+@@ -0,0 +1,219 @@
 +package com.halo.decomp;
 +
 +import android.app.Activity;
@@ -187,12 +187,14 @@ index 00000000..0db976b1
 +/** Fetches public games only while the existing in-game Servers panel is open. */
 +final class CommunityDirectoryClient {
 +    private final File root;
++    private final Activity activity;
 +    private ScheduledExecutorService executor;
 +    private volatile int generation;
 +    private long lastFetch;
 +    private final HashMap<String, Long> artAttempts = new HashMap<>();
 +
 +    CommunityDirectoryClient(Activity activity) {
++        this.activity = activity;
 +        File data = activity.getExternalFilesDir(null);
 +        root = data == null ? null : new File(data, "save");
 +        if (root != null) new File(root, "community_browser_open").delete();
@@ -211,6 +213,8 @@ index 00000000..0db976b1
 +    }
 +    private void tick(int run) {
 +        if (run != generation) return;
++        File diagnostics = new File(root, "community_diagnostics_request");
++        if (diagnostics.exists() && diagnostics.delete()) showDiagnostics(run);
 +        try (InputStream in = new FileInputStream(new File(root, "community_browser_open"))) {
 +            if (in.read() != '1') return;
 +        } catch (IOException e) { return; }
@@ -273,6 +277,45 @@ index 00000000..0db976b1
 +            publish(run, 2, 0, new byte[0]);
 +        } finally { if (connection != null) connection.disconnect(); }
 +    }
++    private void showDiagnostics(int run) {
++        StringBuilder text = new StringBuilder("Halo CE Browser connection diagnostics\n");
++        text.append("Upstream: ").append(BuildConfig.HALO_UPSTREAM_BUILD)
++            .append("; network: ").append(BuildConfig.HALO_NETWORK_VERSION).append('\n');
++        File data = root.getParentFile();
++        try (RandomAccessFile log = new RandomAccessFile(new File(data, "debug.txt"), "r")) {
++            int length = (int)Math.min(log.length(), 96000);
++            log.seek(log.length() - length);
++            byte[] bytes = new byte[length]; log.readFully(bytes);
++            text.append(new String(bytes, StandardCharsets.UTF_8));
++        } catch (IOException e) { text.append("Game debug.txt unavailable: ").append(e.getClass().getSimpleName()).append('\n'); }
++        File androidLog = new File(activity.getCacheDir(), "connection-log.txt");
++        try {
++            Process logs = new ProcessBuilder("logcat", "-d", "-t", "500", "--pid=" + android.os.Process.myPid())
++                .redirectErrorStream(true).redirectOutput(androidLog).start();
++            if (!logs.waitFor(3, TimeUnit.SECONDS)) logs.destroy();
++            try (RandomAccessFile in = new RandomAccessFile(androidLog, "r")) {
++                int count = (int)Math.min(in.length(), 64000); byte[] bytes = new byte[count];
++                in.seek(in.length() - count); in.readFully(bytes);
++                text.append("\nAndroid engine log:\n").append(new String(bytes, StandardCharsets.UTF_8));
++            }
++        } catch (Exception e) { text.append("\nAndroid log unavailable.\n"); }
++        finally { androidLog.delete(); }
++        // Invite tokens confer access to lobbies; remove them before copying a report.
++        final String report = text.toString().replaceAll("(?i)[0-9a-f]{64}", "[invite removed]");
++        activity.runOnUiThread(() -> {
++            if (run != generation || activity.isFinishing()) return;
++            android.widget.TextView view = new android.widget.TextView(activity);
++            view.setText(report); view.setTextIsSelectable(true); view.setPadding(24, 16, 24, 16);
++            android.widget.ScrollView scroll = new android.widget.ScrollView(activity); scroll.addView(view);
++            new android.app.AlertDialog.Builder(activity).setTitle("Connection diagnostics").setView(scroll)
++                .setPositiveButton("Copy", (dialog, which) -> {
++                    android.content.ClipboardManager clipboard = (android.content.ClipboardManager)
++                        activity.getSystemService(android.content.Context.CLIPBOARD_SERVICE);
++                    if (clipboard != null) clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Halo diagnostics", report));
++                }).setNegativeButton("Close", null).show();
++        });
++    }
++
 +    // Only known Milenko map paths; images are optional and never gate joining.
 +    private boolean cacheMapArt(int run, String map) {
 +        if (!java.util.Arrays.asList("beavercreek", "bloodgulch", "boardingaction", "carousel", "chillout",
@@ -660,6 +703,28 @@ index bb00cc89..483b31b5 100644
  host_sdl_window_size_in_pixels
  host_sdl_set_relative_mouse
  host_sdl_gl_set_attribute
+diff --git a/port/linux/game/menu_functions.c b/port/linux/game/menu_functions.c
+index e6388323..7ca53b73 100644
+--- a/port/linux/game/menu_functions.c
++++ b/port/linux/game/menu_functions.c
+@@ -2570,6 +2570,7 @@ static void lobby_update(struct widget_instance *list)
+ 		multiplayer.lobby_first = (short)MAX(0, lobby_player_count - LOBBY_ROWS);
+ 	rows_update(list, (short)MIN(lobby_player_count, LOBBY_ROWS), lobby_row_text);
+ 	visible_set(named(list, "lobby_button_team", 0), game && game->variant.universal_variant.teams);
++	text_set(named(list, "lobby_button_start", 0), global_network_game_server_get() ? L"START NOW" : L"REQUEST START");
+ 	/* (the buttons' focus, off Switch Team when it is hidden) */
+ 	focus_off_hidden(named(list, "lobby_button_bar", 0));
+ 	visible_set(named(description, "lobby_right_item", 0), game != NULL && state >= _client_state_pregame);
+@@ -2588,7 +2589,8 @@ static void lobby_update(struct widget_instance *list)
+ 		gametype[NUMBEROF(gametype) - 1] = 0;
+ 		usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\n%d of %d players\r\n\r\n%s", gametype,
+ 			engine_names[PIN(game->variant.game_engine_index, 0, 5)], lobby_player_count, game->maximum_players,
+-			seconds > 0 ? L"Starting in:" : game->machine_count < 2 ? L"Waiting for players" : L"");
++			seconds > 0 ? L"Starting in:" : game->machine_count < 2 ? L"Waiting for players" :
++			global_network_game_server_get() ? L"" : L"Waiting for the host to start");
+ 		text[NUMBEROF(text) - 1] = 0;
+ 		if (seconds > 0)
+ 		{
 diff --git a/port/linux/src/d3d8_gl.c b/port/linux/src/d3d8_gl.c
 index 43c924d2..53c9e661 100644
 --- a/port/linux/src/d3d8_gl.c
@@ -673,7 +738,7 @@ index 43c924d2..53c9e661 100644
  	platform_menus_set_active(menus_active != 0);
  	return 0;
 diff --git a/port/linux/src/p2p.c b/port/linux/src/p2p.c
-index cf9382dc..96131a51 100644
+index cf9382dc..5b0c00d7 100644
 --- a/port/linux/src/p2p.c
 +++ b/port/linux/src/p2p.c
 @@ -57,6 +57,11 @@ only look up and create stand-ins.
@@ -719,7 +784,7 @@ index cf9382dc..96131a51 100644
  	return 1;
  }
  
-@@ -2309,13 +2322,72 @@ int p2p_join_invite(const char *text)
+@@ -2309,13 +2322,99 @@ int p2p_join_invite(const char *text)
  
  	p2p_identifier();
  	pthread_mutex_lock(&p2p_lock);
@@ -774,6 +839,33 @@ index cf9382dc..96131a51 100644
 +    int active; pthread_mutex_lock(&p2p_lock); active = browser_autojoin_active;
 +    pthread_mutex_unlock(&p2p_lock); return active;
 +}
++/* Called only at the main menu, after disposing the previous game client.
++   Refresh routing and NAT candidates instead of trusting a cached tunnel. */
++void p2p_browser_refresh_host(const unsigned char *host)
++{
++    int i; struct peer *peer;
++    pthread_mutex_lock(&p2p_lock);
++    p2p.joining = p2p.join_requested = 0;
++    p2p_signal_stop_joining();
++    peer = find_peer(host);
++    if (peer) drop_peer(peer, "browser retry: refreshing the connection");
++    for (i = 0; i < p2p.stun_count; i++) {
++        p2p.stun[i].has_mapped = 0;
++        p2p.stun[i].attempts = 0;
++        p2p.stun[i].sent_time = 0;
++    }
++    p2p.stun_started = 1;
++    pthread_mutex_unlock(&p2p_lock);
++}
++int p2p_browser_host_connected(const unsigned char *host)
++{
++    int connected; struct peer *peer;
++    pthread_mutex_lock(&p2p_lock);
++    peer = find_peer(host); connected = peer && peer->connected;
++    pthread_mutex_unlock(&p2p_lock);
++    return connected;
++}
++
 +void p2p_browser_cancel_join(void)
 +{
 +    pthread_mutex_lock(&p2p_lock);
@@ -792,7 +884,7 @@ index cf9382dc..96131a51 100644
  void p2p_invite_received(const char *text)
  {
  	/* (an older version's is logged as such) */
-@@ -2345,6 +2417,7 @@ static void update_joining(void)
+@@ -2345,6 +2444,7 @@ static void update_joining(void)
  	{
  		p2p.joining = 0;
  		p2p_signal_stop_joining();
@@ -800,7 +892,7 @@ index cf9382dc..96131a51 100644
  		platform_log("Internet play: no answer from the invite's host; it may have stopped hosting or quit");
  	}
  }
-@@ -2386,12 +2459,6 @@ static void update_hosting(void)
+@@ -2386,12 +2486,6 @@ static void update_hosting(void)
  		p2p_signal_host(p2p.token);
  		platform_log("Internet play: hosting. Invite players with this link (it only works while this "
  			"copy of the game runs): %s", p2p.invite);
@@ -813,7 +905,7 @@ index cf9382dc..96131a51 100644
  		p2p.reported_player_count = -1;
  	}
  	else if (!want && p2p.hosting)
-@@ -2399,6 +2466,7 @@ static void update_hosting(void)
+@@ -2399,6 +2493,7 @@ static void update_hosting(void)
  		p2p.hosting = 0;
  		p2p_signal_stop_hosting();
  		p2p_discord_set_hosting(NULL, 0, 0);
@@ -821,7 +913,7 @@ index cf9382dc..96131a51 100644
  	}
  	if (p2p.hosting)
  	{
-@@ -2407,6 +2475,18 @@ static void update_hosting(void)
+@@ -2407,6 +2502,18 @@ static void update_hosting(void)
  		int count = p2p.game_player_maximum > 0 ? p2p.game_player_count : connected_player_count() + 1;
  		int maximum = p2p.game_player_maximum > 0 ? p2p.game_player_maximum : P2P_MAXIMUM_PEERS + 1;
  
@@ -840,7 +932,7 @@ index cf9382dc..96131a51 100644
  		if (count != p2p.reported_player_count || maximum != p2p.reported_player_maximum)
  		{
  			p2p.reported_player_count = count;
-@@ -2907,6 +2987,7 @@ static void *p2p_thread(void *unused)
+@@ -2907,6 +3014,7 @@ static void *p2p_thread(void *unused)
  		update_peers();
  		expire_proxies();
  		stun_update();
@@ -848,7 +940,7 @@ index cf9382dc..96131a51 100644
  		update_hosting();
  		update_joining();
  		update_upnp();
-@@ -2976,3 +3057,185 @@ void p2p_initialize(unsigned long local_address)
+@@ -2976,3 +3084,185 @@ void p2p_initialize(unsigned long local_address)
  	if (command_line_invite(invite, sizeof(invite)))
  		p2p_join_invite(invite);
  }
@@ -1035,22 +1127,24 @@ index cf9382dc..96131a51 100644
 +    pthread_mutex_unlock(&p2p_lock);
 +}
 diff --git a/port/linux/src/p2p.h b/port/linux/src/p2p.h
-index c8c6ccb4..54ccf2e6 100644
+index c8c6ccb4..cbb5d6b1 100644
 --- a/port/linux/src/p2p.h
 +++ b/port/linux/src/p2p.h
-@@ -25,6 +25,11 @@ int p2p_hand_off_invite(void);
+@@ -25,6 +25,13 @@ int p2p_hand_off_invite(void);
  /* joins the game an invite link or code leads to; text may hold other
  words around it. Returns nonzero if it held an invite */
  int p2p_join_invite(const char *text);
 +int p2p_browser_request_join(const char *text);
 +int p2p_browser_take_autojoin(unsigned char *host, char *invite);
 +int p2p_browser_join_active(void);
++void p2p_browser_refresh_host(const unsigned char *host);
++int p2p_browser_host_connected(const unsigned char *host);
 +void p2p_browser_cancel_join(void);
 +void p2p_browser_message(const char *text);
  
  /* this machine's identifier, which its XNADDR carries (6 bytes) */
  const unsigned char *p2p_identifier(void);
-@@ -112,5 +117,28 @@ void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
+@@ -112,5 +119,28 @@ void p2p_hardware_id_sanitize(char *destination, int size, const char *source);
  virtual address (network byte order): where its packets come from; 0 if
  it is no peer's */
  unsigned long p2p_peer_endpoint_address(unsigned long virtual_address);
@@ -1198,10 +1292,10 @@ index 00000000..d08d8564
 +#endif
 diff --git a/port/linux/src/p2p_browser_ui.h b/port/linux/src/p2p_browser_ui.h
 new file mode 100644
-index 00000000..a171e1fc
+index 00000000..6b508f61
 --- /dev/null
 +++ b/port/linux/src/p2p_browser_ui.h
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,312 @@
 +/* Main-thread, nonblocking touch/mouse browser. Included by sdl_platform.c.
 +   Drawing uses only scissor clears already available in the Android GL bridge.
 +   D3DDevice_Present invalidates GL state after platform_video_swap. */
@@ -1210,6 +1304,7 @@ index 00000000..a171e1fc
 +static Uint64 browser_snapshot_time;
 +static char browser_notice[128];
 +static char browser_selected_invite[256];
++static Uint64 browser_join_started;
 +static unsigned char browser_art[5][40 * 20 * 3];
 +static int browser_art_ready[5];
 +const char *platform_save_root(void);
@@ -1293,7 +1388,7 @@ index 00000000..a171e1fc
 +static void browser_show(int visible)
 +{
 +    browser_visible = visible; browser_confirm_public = 0;
-+    if (!visible) { browser_selected_invite[0] = 0; browser_notice[0] = 0; }
++    if (!visible) { browser_selected_invite[0] = 0; browser_notice[0] = 0; browser_join_started = 0; }
 +    p2p_browser_open(visible);
 +    platform_mouse_capture(!visible && !input_state.mouse_released && !input_state.ui_pointer);
 +    memset(input_state.keys, 0, sizeof(input_state.keys));
@@ -1320,6 +1415,15 @@ index 00000000..a171e1fc
 +        return;
 +    }
 +    if (x >= 650 && y >= 8 && y < 48) { browser_show(0); return; }
++#ifdef HALO_ANDROID
++    if (x >= 540 && x < 638 && y >= 8 && y < 48) {
++        char path[1024]; FILE *file;
++        snprintf(path, sizeof(path), "%s/community_diagnostics_request", platform_save_root());
++        file = fopen(path, "wb");
++        if (file) { fputc('1', file); fclose(file); }
++        return;
++    }
++#endif
 +    if (browser_confirm_public)
 +    {
 +        if (y >= 300 && y < 340)
@@ -1367,9 +1471,10 @@ index 00000000..a171e1fc
 +        else if (entry->joinable && (!entry->maximum || entry->players < entry->maximum))
 +        {
 +            if (p2p_browser_join_active() && !strcmp(browser_selected_invite, entry->invite)) {
-+                p2p_browser_cancel_join(); browser_selected_invite[0] = 0; browser_notice[0] = 0;
++                p2p_browser_cancel_join(); browser_selected_invite[0] = 0; browser_notice[0] = 0; browser_join_started = 0;
 +            } else if (p2p_browser_request_join(entry->invite)) {
 +                snprintf(browser_selected_invite, sizeof(browser_selected_invite), "%s", entry->invite);
++                browser_join_started = SDL_GetTicks();
 +                browser_notice[0] = 0;
 +            } else {
 +                snprintf(browser_notice, sizeof(browser_notice), "Could not join this room. Try another server.");
@@ -1448,6 +1553,9 @@ index 00000000..a171e1fc
 +    browser_rect(0, 0, 800, 480, .02f, .055f, .09f);
 +    browser_text_draw(16, 20, "HALO - COMMUNITY SERVERS", 48);
 +    browser_button(650, 8, 134, "Close");
++#ifdef HALO_ANDROID
++    browser_button(540, 8, 98, "Logs");
++#endif
 +    if (browser_confirm_public)
 +    {
 +        browser_text_draw(20, 110, "Publish this lobby?", 60);
@@ -1487,7 +1595,10 @@ index 00000000..a171e1fc
 +                entry->joinable && (!entry->maximum || entry->players < entry->maximum) ? (p2p_browser_join_active() && !strcmp(browser_selected_invite, entry->invite) ? (entry->saved ? "End" : "Cancel") : (entry->saved ? "Go" : "Join")) : (entry->saved ? "-" : "Closed"));
 +            if (entry->saved) browser_button(740, y + 5, 40, "X");
 +        }
-+        browser_text_draw(16, 390, browser_notice, 64);
++        if (!browser_notice[0] && browser_selected_invite[0] && p2p_browser_join_active() &&
++            SDL_GetTicks() - browser_join_started >= 10000)
++            browser_text_draw(16, 390, "Still waiting? Cancel. Switch Wi-Fi / 4G/5G then retry.", 64);
++        else browser_text_draw(16, 390, browser_notice, 64);
 +        browser_button(16, 420, 150, browser_view.public_game ? "Public: on" : "Private");
 +        browser_button(174, 420, 150, "Copy invite");
 +        browser_button(332, 420, 150, "Add invite");
@@ -1820,7 +1931,7 @@ index 06672577..c88af473 100644
  	if (port == 0)
  	{
 diff --git a/source/interface/ui_widget.c b/source/interface/ui_widget.c
-index f5502acb..9c621a3c 100644
+index f5502acb..823961af 100644
 --- a/source/interface/ui_widget.c
 +++ b/source/interface/ui_widget.c
 @@ -677,6 +677,10 @@ struct widget_instance;
@@ -1834,7 +1945,16 @@ index f5502acb..9c621a3c 100644
  
  /* ---------- constants */
  
-@@ -7276,6 +7280,74 @@ static boolean ui_check_for_pause_game(
+@@ -4608,7 +4612,7 @@ void network_game_reset_to_pregame_ui(
+ 		else
+ 		{
+ 			if (!ui_widget_load_by_name_or_tag(
+-				pc_menus_screen("ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen"),
++				pc_menus_screen("pc\\main_menu\\multiplayer_type_select\\lobby\\lobby_screen"),
+ 				NONE, NULL, NONE, NONE, NONE, NONE))
+ 			{
+ 				error(_error_silent, "failed to load networked pregame status screen");
+@@ -7276,6 +7280,111 @@ static boolean ui_check_for_pause_game(
  	return pause_pressed;
  }
  
@@ -1845,7 +1965,8 @@ index f5502acb..9c621a3c 100644
 +{
 +    static unsigned char host[6];
 +    static boolean waiting;
-+    static unsigned long started;
++    static unsigned long started, lobby_started;
++    static boolean host_reached;
 +    unsigned char requested[6];
 +    char invite[256];
 +    if (p2p_browser_take_autojoin(requested, invite)) {
@@ -1861,10 +1982,11 @@ index f5502acb..9c621a3c 100644
 +            p2p_browser_cancel_join();
 +            p2p_browser_message("Could not start multiplayer networking. Restart Halo and try again."); return;
 +        }
-+        if (!p2p_join_invite(invite)) { p2p_browser_cancel_join(); return; }
 +        memcpy(host, requested, sizeof(host));
 +        dispose_global_network_game_client();
 +        dispose_global_network_game_server();
++        p2p_browser_refresh_host(host);
++        if (!p2p_join_invite(invite)) { p2p_browser_cancel_join(); return; }
 +        player_ui_clear_multiplayer_variant();
 +        if (!create_global_network_game_client()) {
 +            waiting = FALSE;
@@ -1872,14 +1994,32 @@ index f5502acb..9c621a3c 100644
 +            p2p_browser_message("Could not create the lobby connection."); return;
 +        }
 +        game_connection_set(1);
-+        if (player_ui_get_active_player_profile_index(0) == NONE) {
++        /* Use the PC menus' profile fallback too: the remembered index may
++           be absent even though a valid saved profile exists. Never join as
++           an empty machine: hosts cannot start us without a local player. */
++        profile_index = player_ui_get_active_player_profile_index(0);
++        if (profile_index == NONE || !player_profile_get(profile_index, &profile)) {
 +            profile_index = player_ui_get_player1_last_used_profile_index();
-+            if (profile_index != NONE && player_profile_get(profile_index, &profile))
-+                player_ui_set_active_player_profile(0, profile_index, &profile);
++            if (profile_index == NONE || !player_profile_get(profile_index, &profile)) {
++                word count = 1;
++                profile_index = NONE;
++                player_profiles_enumerate_available_to_local_player_index(NONE, &count, &profile_index, FALSE);
++                if ((short)count <= 0 || profile_index == NONE || !player_profile_get(profile_index, &profile)) {
++                    dispose_global_network_game_client();
++                    game_connection_set(0);
++                    p2p_browser_cancel_join();
++                    platform_browser_close();
++                    display_error_text_deferred(L"Select or create a player profile before joining a server.", 0);
++                    error(3, "Browser join cancelled: no usable player profile");
++                    return;
++                }
++            }
 +        }
-+        if (player_ui_get_active_player_profile_index(0) != NONE)
-+            player_ui_local_player_joined_multiplayer_game(0);
-+        started = system_milliseconds(); waiting = TRUE;
++        player_ui_set_active_player_profile(0, profile_index, &profile);
++        player_ui_set_single_player_local_player_controller(0, 0);
++        player_ui_local_player_joined_multiplayer_game(0);
++        error(3, "Browser join: local profile %ld prepared for controller 0", profile_index);
++        started = system_milliseconds(); host_reached = FALSE; waiting = TRUE;
 +    }
 +    if (!waiting) return;
 +    if (!p2p_browser_join_active()) {
@@ -1889,16 +2029,33 @@ index f5502acb..9c621a3c 100644
 +        return;
 +    }
 +    if (!global_network_game_client_get()) { waiting = FALSE; p2p_browser_cancel_join(); return; }
-+    if (system_milliseconds() - started >= 60000) {
++    if (!host_reached && p2p_browser_host_connected(host)) {
++        host_reached = TRUE; lobby_started = system_milliseconds();
++        error(3, "Browser join: peer reached; waiting for the selected game advertisement");
++    }
++    if ((!host_reached && system_milliseconds() - started >= 90000) ||
++        (host_reached && system_milliseconds() - lobby_started >= 20000)) {
 +        waiting = FALSE;
++        dispose_global_network_game_client();
++        game_connection_set(0);
 +        p2p_browser_cancel_join();
-+        p2p_browser_message("Could not enter the selected lobby. Host offline or NAT blocked."); return;
++        platform_browser_close();
++        display_error_text_deferred(
++            L"Connection timed out.\r\n"
++            L"Try another server.\r\n"
++            L"Switch Wi-Fi/data or\r\n"
++            L"try VPN/WARP on/off.", 0);
++        error(3, "Browser join timed out in %s stage; client disposed", host_reached ? "lobby discovery" : "peer connection");
++        return;
 +    }
 +    if (network_game_client_join_invited_host(host)) {
 +        waiting = FALSE;
++        /* Back must restore a real screen, as the native PC join flow does. */
++        extern char const *pc_menus_root_name(void);
++        long return_tag = tag_loaded(UI_WIDGET_DEFINITION_TAG, pc_menus_root_name());
 +        if (ui_widget_load_by_name_or_tag(
-+            "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen",
-+            NONE, NULL, NONE, NONE, NONE, NONE)) {
++            "pc\\main_menu\\multiplayer_type_select\\lobby\\lobby_screen",
++            NONE, NULL, NONE, return_tag, NONE, NONE)) {
 +            platform_browser_close();
 +            p2p_browser_message("Joining the selected lobby...");
 +        } else p2p_browser_message("Connected, but the lobby screen could not load.");
@@ -1909,7 +2066,7 @@ index f5502acb..9c621a3c 100644
  void process_ui_widgets(
  	void)
  {
-@@ -7291,6 +7363,9 @@ void process_ui_widgets(
+@@ -7291,6 +7400,9 @@ void process_ui_widgets(
  		644,
  		widget_globals.initialized);
  	widget_globals.current_system_milliseconds = system_milliseconds();
@@ -1919,6 +2076,33 @@ index f5502acb..9c621a3c 100644
  	ui_widgets_process_mouse();
  	if (widget_globals.initialization_thread)
  	{
+diff --git a/source/interface/ui_widget_event_handler_functions.c b/source/interface/ui_widget_event_handler_functions.c
+index b5ae04fa..330f926e 100644
+--- a/source/interface/ui_widget_event_handler_functions.c
++++ b/source/interface/ui_widget_event_handler_functions.c
+@@ -2858,6 +2858,7 @@ static boolean network_game_start_faster(
+ 	{
+ 		struct network_game *game = network_game_client_get_game(client);
+ 		machine_index = network_game_client_get_machine_index(client);
++		network_event("Lobby Start pressed: controller %d, local machine %d", event->controller_index, machine_index);
+ 		/* (port: every player the native builds' sessions hold, halo_port_limits.h) */
+ 		for (player_index = 0; player_index < (long)NUMBEROF(game->players); player_index++)
+ 		{
+@@ -2865,12 +2866,14 @@ static boolean network_game_start_faster(
+ 				(short)game->players[player_index].machine_index == (short)machine_index &&
+ 				(short)game->players[player_index].controller_index == event->controller_index)
+ 			{
++				network_event("Lobby Start: requesting countdown from host");
+ 				if (!network_game_client_request_start_time_change(client, TRUE))
+ 					error(2, "network_game_client_request_start_time_change() failed");
+ 				return TRUE;
+ 			}
+ 		}
+ 	}
++	network_event("Lobby Start ignored: no player matches the active controller");
+ 	return TRUE;
+ }
+ 
 diff --git a/source/networking/network_client_manager.c b/source/networking/network_client_manager.c
 index 35cac6bb..5b2ca547 100644
 --- a/source/networking/network_client_manager.c
@@ -2016,7 +2200,7 @@ index 3ef12727..ee0568f7 100644
  	void);
  boolean network_game_client_set_team(
 diff --git a/source/networking/network_server_manager.c b/source/networking/network_server_manager.c
-index 238e0631..92c965e8 100644
+index 4d3417db..9072e4fa 100644
 --- a/source/networking/network_server_manager.c
 +++ b/source/networking/network_server_manager.c
 @@ -476,6 +476,7 @@ symbols in this file:
