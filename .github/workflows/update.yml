@@ -2,6 +2,11 @@ name: Update modified Halo Android
 
 on:
   workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: Rebuild the current upstream release with our latest fixes
+        type: boolean
+        default: false
   schedule:
     - cron: '*/5 * * * *'
 
@@ -19,6 +24,7 @@ jobs:
 
     env:
       GH_TOKEN: ${{ github.token }}
+      FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force_rebuild || false }}
 
     steps:
       - uses: actions/checkout@v5
