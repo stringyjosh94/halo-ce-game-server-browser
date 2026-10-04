@@ -105,6 +105,9 @@ def build():
         for file in (source / 'port/assets/fonts').glob('*LICENSE*'): archive.write(file, 'licenses/' + file.name)
         archive.write(source / 'port/third_party/extract-xiso/LICENSE.TXT', 'licenses/extract-xiso.txt')
         archive.write(source / 'port/third_party/miniupnpc/LICENSE', 'licenses/miniupnpc.txt')
+        monocypher_license = source / 'port/third_party/monocypher/LICENCE.md'
+        if monocypher_license.exists():
+            archive.write(monocypher_license, 'licenses/monocypher.md')
     output('tag', 'build-' + str(version))
 
 if __name__ == '__main__':
